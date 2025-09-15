@@ -1,0 +1,14 @@
+{
+  "name": "streaming_api",
+  "version": "1.0.0",
+  "description": "stream a magnet torrent link",
+  "license": "MIT",
+  "author": "Andre Villarreal",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "express": "^5.1.0"
+  }
+}
