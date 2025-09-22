@@ -6,4 +6,6 @@ const router = Router();
 // Endpoint: /api/stream/:filename
 router.get("/stream/:filename", streamVideoController);
 
+router.get("/stream/:id", streamVideoController);
+
 export default router;

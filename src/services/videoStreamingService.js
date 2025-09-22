@@ -1,12 +1,21 @@
 import fs from "fs";
 import path from "path";
 
+// Update path to look in src/public/videos
+const projectRoot = path.resolve();
+
+// Fix the path to look in src/public/videos
+const videosDir = path.join(projectRoot, "src", "public", "videos");
+
 export function getVideoFileInfo(fileName) {
-  // Ajusta la ruta según tu estructura real
-  const videoPath = path.resolve("videos", fileName);
+  console.log(`Looking for video file: ${fileName}`);
+  const videoPath = path.join(videosDir, fileName);
+
   if (!fs.existsSync(videoPath)) {
-    throw new Error("Video not found");
+    console.error(`Error: Video not found at ${videoPath}`);
+    throw new Error(`Video not found: ${fileName}`);
   }
+
   const stat = fs.statSync(videoPath);
   return { videoPath, stat };
 }
