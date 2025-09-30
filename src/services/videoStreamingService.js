@@ -17,5 +17,31 @@ export function getVideoFileInfo(fileName) {
   }
 
   const stat = fs.statSync(videoPath);
-  return { videoPath, stat };
+
+  // Determine content type based on file extension
+  const extension = path.extname(fileName).toLowerCase();
+  let contentType = "video/mp4"; // default
+
+  // Detect if this is an audio file
+  if ([".mp3", ".aac", ".wav", ".ogg", ".flac"].includes(extension)) {
+    contentType = {
+      ".mp3": "audio/mpeg",
+      ".aac": "audio/aac",
+      ".wav": "audio/wav",
+      ".ogg": "audio/ogg",
+      ".flac": "audio/flac",
+    }[extension];
+    console.log(`Detected audio file: ${fileName} (${contentType})`);
+  } else if ([".mkv", ".avi", ".webm", ".mp4", ".m4v"].includes(extension)) {
+    contentType =
+      {
+        ".mkv": "video/x-matroska",
+        ".avi": "video/x-msvideo",
+        ".webm": "video/webm",
+        ".mp4": "video/mp4",
+        ".m4v": "video/mp4",
+      }[extension] || "video/mp4";
+  }
+
+  return { videoPath, stat, contentType };
 }
