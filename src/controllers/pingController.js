@@ -1,5 +1,7 @@
-export function ping(req, res) {
-  res.status(200).json({ message: "ping" });
+import { getStatus } from "./videoStreamingController.js";
 
-  res.status(400).json({ error: "Incorrect petition" });
+export function ping(req, res) {
+  res.status(200).json({ message: "API is running" });
 }
+
+export { getStatus };
