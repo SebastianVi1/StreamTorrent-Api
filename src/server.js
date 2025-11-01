@@ -14,27 +14,28 @@ if (!fs.existsSync(downloadsPath)) {
 
 const server = app.listen(port, () => {
   const videosPath = path.join(path.resolve(), "src", "public", "videos");
+  const urls = app.locals.urls || {};
   console.log(`Server running on http://localhost:${port}`);
 });
 
 // Graceful shutdown
-process.on('SIGTERM', gracefulShutdown);
-process.on('SIGINT', gracefulShutdown);
+process.on("SIGTERM", gracefulShutdown);
+process.on("SIGINT", gracefulShutdown);
 
 function gracefulShutdown() {
-  console.log('Received shutdown signal, cleaning up resources...');
-  
+  console.log("Received shutdown signal, cleaning up resources...");
+
   // Clean up torrents first
   cleanupTorrents();
-  
+
   server.close(() => {
-    console.log('Server closed');
+    console.log("Server closed");
     process.exit(0);
   });
-  
+
   // Force close after 10s if graceful shutdown fails
   setTimeout(() => {
-    console.error('Forced shutdown after timeout');
+    console.error("Forced shutdown after timeout");
     process.exit(1);
   }, 10000);
 }
