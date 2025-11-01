@@ -1,3 +1,9 @@
+node_modules
+.git
+.env*
+npm-debug.log
+Dockerfile*
+/.DS_Store
 # Include any files or directories that you don't want to be copied to your
 # container here (e.g., local build artifacts, temporary files, etc.).
 #

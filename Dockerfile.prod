@@ -1,0 +1,20 @@
+FROM node:18-alpine
+WORKDIR /app
+
+# Production environment
+ENV NODE_ENV=production
+
+COPY package*.json ./
+
+# Install build tools temporarily for native modules, install deps, then remove tools
+RUN apk add --no-cache python3 make g++ && \
+    npm install --production --silent && \
+    apk del python3 make g++
+
+# Copy source
+COPY . .
+
+EXPOSE 3000
+
+# Start the production server
+CMD ["node", "src/server.js"]
