@@ -2,7 +2,6 @@ import fs from "fs";
 import path from "path";
 import { getVideoFileInfo } from "../services/videoStreamingService.js";
 import WebTorrent from "webtorrent";
-import { fileURLToPath } from "url";
 
 // Initialize WebTorrent client
 const client = new WebTorrent();
@@ -15,10 +14,11 @@ const activeConnections = new Map();
 
 // Configuration for resource management
 const CONFIG = {
-  MAX_TORRENTS: 20,                   // Maximum number of active torrents
-  TORRENT_TIMEOUT: 10 * 60 * 1000,    // Remove torrents after 10 minutes of inactivity (reduced from 30)
-  CLEANUP_INTERVAL: 2 * 60 * 1000,    // Run cleanup every 2 minutes (reduced from 5)
-  FILE_CLEANUP_DELAY: 30 * 1000,      // Wait 30 seconds after stream ends before removing files
+  MAX_TORRENTS: 2, // Keep the number of simultaneous torrents small on 4GB RAM
+  TORRENT_TIMEOUT: 3 * 60 * 1000, // Drop torrents quickly once inactive
+  CLEANUP_INTERVAL: 60 * 1000, // Check usage frequently to react before OOM
+  FILE_CLEANUP_DELAY: 10 * 1000, // Remove files shortly after the last client leaves
+  MEMORY_LIMIT_MB: 400, // Hard ceiling where we aggressively free resources
 };
 
 // Get downloads directory path
@@ -29,34 +29,68 @@ const torrentLastAccess = new Map();
 
 // Setup periodic cleanup for inactive torrents and files
 setInterval(() => {
-  console.log("Running resource cleanup...");
   const now = Date.now();
-  
+
+  const heapUsedMb = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
+  if (heapUsedMb > CONFIG.MEMORY_LIMIT_MB) {
+    console.warn(
+      `High memory usage detected (${heapUsedMb}MB). Triggering emergency cleanup.`
+    );
+
+    // Remove the oldest torrents first to release resources fast
+    const sortedTorrents = Array.from(torrentLastAccess.entries()).sort(
+      ([, aAccess], [, bAccess]) => aAccess - bAccess
+    );
+
+    sortedTorrents.forEach(([magnetLink]) => {
+      if (
+        process.memoryUsage().heapUsed / 1024 / 1024 <=
+        CONFIG.MEMORY_LIMIT_MB * 0.8
+      ) {
+        return;
+      }
+      removeTorrent(magnetLink);
+    });
+
+    if (global.gc) {
+      global.gc();
+    }
+  }
+
   // Clean up inactive torrents
   torrentLastAccess.forEach((lastAccess, magnetLink) => {
     if (now - lastAccess > CONFIG.TORRENT_TIMEOUT) {
       removeTorrent(magnetLink);
     }
   });
-  
+
   // Clean up orphaned files in downloads directory
   cleanupOrphanedFiles();
-  
-  console.log(`Active torrents: ${activeTorrents.size}/${CONFIG.MAX_TORRENTS}`);
-  console.log(`Active connections: ${activeConnections.size}`);
 }, CONFIG.CLEANUP_INTERVAL);
 
 // Helper function to remove a torrent and clean up resources
 function removeTorrent(magnetLink) {
   const torrent = activeTorrents.get(magnetLink);
   if (torrent) {
-    console.log(`Removing inactive torrent: ${torrent.name || 'unnamed'}`);
-    
-    // Remove the torrent
-    client.remove(torrent, { destroyStore: true }, (err) => {
-      if (err) console.error("Error removing torrent:", err.message);
-      
-      // Manually remove torrent files to ensure cleanup
+    console.log(`Removing inactive torrent: ${torrent.name || "unnamed"}`);
+
+    try {
+      if (typeof torrent.pause === "function") {
+        torrent.pause();
+      }
+
+      if (typeof torrent.removeAllListeners === "function") {
+        torrent.removeAllListeners();
+      }
+    } catch (err) {
+      console.error(`Error preparing torrent for removal: ${err.message}`);
+    }
+
+    const removeCallback = (err) => {
+      if (err) {
+        console.error("Error removing torrent:", err.message);
+      }
+
       if (torrent.path) {
         try {
           const torrentPath = path.join(downloadsPath, torrent.name);
@@ -68,11 +102,18 @@ function removeTorrent(magnetLink) {
           console.error(`Error removing torrent files: ${e.message}`);
         }
       }
-    });
-    
+    };
+
+    if (typeof torrent.destroy === "function") {
+      torrent.destroy({ destroyStore: true }, removeCallback);
+    } else {
+      const torrentId = torrent.infoHash || magnetLink;
+      client.remove(torrentId, { destroyStore: true }, removeCallback);
+    }
+
     activeTorrents.delete(magnetLink);
     torrentLastAccess.delete(magnetLink);
-    
+
     // Close any active connections for this torrent
     activeConnections.forEach((connectionInfo, connectionId) => {
       if (connectionInfo.magnetLink === magnetLink) {
@@ -87,18 +128,18 @@ function removeTorrent(magnetLink) {
 function cleanupOrphanedFiles() {
   try {
     if (!fs.existsSync(downloadsPath)) return;
-    
+
     const activeTorrentNames = new Set();
-    activeTorrents.forEach(torrent => {
+    activeTorrents.forEach((torrent) => {
       if (torrent.name) activeTorrentNames.add(torrent.name);
     });
-    
+
     const files = fs.readdirSync(downloadsPath);
-    
-    files.forEach(file => {
+
+    files.forEach((file) => {
       if (!activeTorrentNames.has(file)) {
         const filePath = path.join(downloadsPath, file);
-        
+
         try {
           const stats = fs.statSync(filePath);
           // If it's a directory or file that's not being used
@@ -134,8 +175,8 @@ export async function streamVideoController(req, res) {
         "Content-Type": "video/mp4",
         // Prevent caching to ensure fresh content on refresh
         "Cache-Control": "no-store, must-revalidate",
-        "Pragma": "no-cache",
-        "Expires": "0"
+        Pragma: "no-cache",
+        Expires: "0",
       };
       res.writeHead(200, headers);
       fs.createReadStream(videoPath).pipe(res);
@@ -143,7 +184,7 @@ export async function streamVideoController(req, res) {
     }
 
     const CHUNK_SIZE = 10 ** 6; // 1MB
-    const start = Number(range.replace(/\D/g, "")); 
+    const start = Number(range.replace(/\D/g, ""));
     const end = Math.min(start + CHUNK_SIZE, videoSize - 1);
     const contentLength = end - start + 1;
 
@@ -154,12 +195,12 @@ export async function streamVideoController(req, res) {
       "Content-Type": "video/mp4",
       // Prevent browser from caching chunks for too long
       "Cache-Control": "no-store, must-revalidate",
-      "Pragma": "no-cache",
-      "Expires": "0"
+      Pragma: "no-cache",
+      Expires: "0",
     };
     res.writeHead(206, headers);
     const videoStream = fs.createReadStream(videoPath, { start, end });
-    
+
     // Track stream errors
     videoStream.on("error", (err) => {
       console.error(`Video stream error: ${err.message}`);
@@ -167,7 +208,7 @@ export async function streamVideoController(req, res) {
         res.end();
       }
     });
-    
+
     videoStream.pipe(res);
   } catch (err) {
     console.error(`Video streaming error: ${err.message}`);
@@ -178,25 +219,30 @@ export async function streamVideoController(req, res) {
 export async function streamTorrentController(req, res) {
   try {
     const magnetLink = decodeURIComponent(req.params.magnet || "");
-    const connectionId = `${req.ip}-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
+    const connectionId = `${req.ip}-${Date.now()}-${Math.random()
+      .toString(36)
+      .substring(2, 10)}`;
 
     if (!magnetLink) {
       return res.status(400).json({ error: "Magnet link is required" });
     }
 
     // Check if we've reached the maximum number of active torrents
-    if (activeTorrents.size >= CONFIG.MAX_TORRENTS && !activeTorrents.has(magnetLink)) {
+    if (
+      activeTorrents.size >= CONFIG.MAX_TORRENTS &&
+      !activeTorrents.has(magnetLink)
+    ) {
       // Find the least recently used torrent to remove
       let oldestAccess = Date.now();
       let oldestMagnet = null;
-      
+
       torrentLastAccess.forEach((time, magnet) => {
         if (time < oldestAccess) {
           oldestAccess = time;
           oldestMagnet = magnet;
         }
       });
-      
+
       if (oldestMagnet) {
         removeTorrent(oldestMagnet);
       }
@@ -213,11 +259,11 @@ export async function streamTorrentController(req, res) {
 
       // Create a new promise to handle the torrent adding process
       const torrentPromise = new Promise((resolve, reject) => {
-        const addOptions = { 
+        const addOptions = {
           announce: [],
-          path: downloadsPath // Store downloads in separate directory
+          path: downloadsPath, // Store downloads in separate directory
         };
-        
+
         client.add(magnetLink, addOptions, (torrent) => {
           console.log(`Torrent added: ${torrent.name}`);
           resolve(torrent);
@@ -231,17 +277,16 @@ export async function streamTorrentController(req, res) {
         torrent = await torrentPromise;
         activeTorrents.set(magnetLink, torrent);
         torrentLastAccess.set(magnetLink, Date.now());
-        
+
         // Set up event listeners for better resource management
-        torrent.on('error', (err) => {
+        torrent.on("error", (err) => {
           console.error(`Torrent error for ${torrent.name}: ${err.message}`);
           removeTorrent(magnetLink);
         });
-        
-        torrent.on('done', () => {
+
+        torrent.on("done", () => {
           console.log(`Torrent completed: ${torrent.name}`);
         });
-        
       } catch (error) {
         console.error("Error adding torrent:", error);
         return res.status(500).json({ error: "Failed to add torrent" });
@@ -262,11 +307,12 @@ export async function streamTorrentController(req, res) {
     let contentType = "video/mp4";
 
     if ([".mkv", ".avi", ".webm"].includes(extension)) {
-      contentType = {
-        ".mkv": "video/x-matroska",
-        ".avi": "video/x-msvideo",
-        ".webm": "video/webm",
-      }[extension] || "video/mp4";
+      contentType =
+        {
+          ".mkv": "video/x-matroska",
+          ".avi": "video/x-msvideo",
+          ".webm": "video/webm",
+        }[extension] || "video/mp4";
     }
 
     // Store connection info
@@ -274,7 +320,7 @@ export async function streamTorrentController(req, res) {
       magnetLink,
       torrentName: torrent.name,
       startTime: Date.now(),
-      fileName: file.name
+      fileName: file.name,
     });
 
     // Handle range requests for better streaming
@@ -295,9 +341,9 @@ export async function streamTorrentController(req, res) {
         "Content-Length": chunkSize,
         "Content-Type": contentType,
         // Prevent browser from caching chunks
-        "Cache-Control": "no-store, must-revalidate", 
-        "Pragma": "no-cache",
-        "Expires": "0"
+        "Cache-Control": "no-store, must-revalidate",
+        Pragma: "no-cache",
+        Expires: "0",
       });
 
       // Create stream for the specified range
@@ -309,8 +355,8 @@ export async function streamTorrentController(req, res) {
         "Content-Type": contentType,
         // Prevent browser from caching chunks
         "Cache-Control": "no-store, must-revalidate",
-        "Pragma": "no-cache",
-        "Expires": "0"
+        Pragma: "no-cache",
+        Expires: "0",
       });
 
       stream = file.createReadStream();
@@ -330,7 +376,7 @@ export async function streamTorrentController(req, res) {
       if (!stream.destroyed) {
         stream.destroy();
       }
-      
+
       // Clean up connection tracking
       activeConnections.delete(connectionId);
     });
@@ -339,35 +385,37 @@ export async function streamTorrentController(req, res) {
     req.on("close", () => {
       isClientDisconnected = true;
       console.log("Client disconnected, cleaning up stream");
-      
+
       // Remove from active connections
       activeConnections.delete(connectionId);
-      
+
       // Destroy the stream if it's still active
       if (!stream.destroyed) {
         stream.destroy();
       }
-      
+
       // Check if this was the last connection for this torrent
       let hasOtherConnections = false;
-      activeConnections.forEach(info => {
+      activeConnections.forEach((info) => {
         if (info.magnetLink === magnetLink) {
           hasOtherConnections = true;
         }
       });
-      
+
       // If this was the last connection, schedule torrent for removal after a delay
       if (!hasOtherConnections) {
-        console.log(`No more active connections for ${torrent.name}, scheduling removal`);
+        console.log(
+          `No more active connections for ${torrent.name}, scheduling removal`
+        );
         setTimeout(() => {
           // Double-check there are still no connections before removing
           let stillHasConnections = false;
-          activeConnections.forEach(info => {
+          activeConnections.forEach((info) => {
             if (info.magnetLink === magnetLink) {
               stillHasConnections = true;
             }
           });
-          
+
           if (!stillHasConnections) {
             console.log(`Removing unused torrent: ${torrent.name}`);
             removeTorrent(magnetLink);
@@ -379,10 +427,10 @@ export async function streamTorrentController(req, res) {
     // Handle response completion
     res.on("finish", () => {
       console.log("Stream completed successfully");
-      
+
       // Clean up connection tracking
       activeConnections.delete(connectionId);
-      
+
       // Update last access time
       torrentLastAccess.set(magnetLink, Date.now());
     });
@@ -404,12 +452,12 @@ export async function streamTorrentController(req, res) {
 // Export function for testing or external cleanup
 export function cleanupTorrents() {
   console.log("Cleaning up all torrents and downloads...");
-  
+
   // Remove all active torrents
   activeTorrents.forEach((torrent, magnetLink) => {
     removeTorrent(magnetLink);
   });
-  
+
   // Clean up any remaining files in the downloads directory
   try {
     if (fs.existsSync(downloadsPath)) {
@@ -418,8 +466,8 @@ export function cleanupTorrents() {
           console.error(`Error reading downloads directory: ${err.message}`);
           return;
         }
-        
-        files.forEach(file => {
+
+        files.forEach((file) => {
           const filePath = path.join(downloadsPath, file);
           try {
             fs.rmSync(filePath, { recursive: true, force: true });
@@ -433,14 +481,14 @@ export function cleanupTorrents() {
   } catch (err) {
     console.error(`Error during downloads cleanup: ${err.message}`);
   }
-  
+
   console.log("All torrents and downloads cleaned up");
 }
 
 // Create a ping controller to check active connections and torrents
 export function getStatus(req, res) {
   const status = {
-    activeTorrents: Array.from(activeTorrents.keys()).map(magnetLink => {
+    activeTorrents: Array.from(activeTorrents.keys()).map((magnetLink) => {
       const torrent = activeTorrents.get(magnetLink);
       return {
         name: torrent.name,
@@ -449,19 +497,19 @@ export function getStatus(req, res) {
         uploaded: torrent.uploaded,
         downloaded: torrent.downloaded,
         ratio: torrent.ratio,
-        timeRemaining: torrent.timeRemaining
+        timeRemaining: torrent.timeRemaining,
       };
     }),
-    activeConnections: Array.from(activeConnections.values()).map(conn => {
+    activeConnections: Array.from(activeConnections.values()).map((conn) => {
       return {
         torrentName: conn.torrentName,
         fileName: conn.fileName,
-        duration: Date.now() - conn.startTime
+        duration: Date.now() - conn.startTime,
       };
     }),
     totalTorrents: activeTorrents.size,
-    totalConnections: activeConnections.size
+    totalConnections: activeConnections.size,
   };
-  
+
   res.json(status);
 }

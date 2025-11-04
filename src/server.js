@@ -18,6 +18,20 @@ const server = app.listen(port, () => {
   console.log(`Server running on http://localhost:${port}`);
 });
 
+const MEMORY_LOG_INTERVAL = 60 * 1000;
+
+setInterval(() => {
+  const usage = process.memoryUsage();
+  const heapUsedMb = Math.round(usage.heapUsed / 1024 / 1024);
+  const rssMb = Math.round(usage.rss / 1024 / 1024);
+  console.log(`Memory usage → heap: ${heapUsedMb}MB | rss: ${rssMb}MB`);
+
+  if (heapUsedMb > 350 && global.gc) {
+    console.warn("High heap usage detected, forcing garbage collection");
+    global.gc();
+  }
+}, MEMORY_LOG_INTERVAL);
+
 // Graceful shutdown
 process.on("SIGTERM", gracefulShutdown);
 process.on("SIGINT", gracefulShutdown);

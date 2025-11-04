@@ -3,6 +3,7 @@ WORKDIR /app
 
 # Production environment
 ENV NODE_ENV=production
+ENV NODE_OPTIONS="--max-old-space-size=512 --expose-gc"
 
 COPY package*.json ./
 
@@ -16,5 +17,5 @@ COPY . .
 
 EXPOSE 3000
 
-# Start the production server
-CMD ["node", "src/server.js"]
+# Start the production server with bounded heap and GC exposure
+CMD ["node", "--max-old-space-size=512", "--expose-gc", "src/server.js"]
