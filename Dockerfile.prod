@@ -1,4 +1,4 @@
-FROM node:18-alpine
+FROM node:18-slim
 WORKDIR /app
 
 # Production environment
@@ -6,10 +6,13 @@ ENV NODE_ENV=production
 
 COPY package*.json ./
 
-# Install build tools temporarily for native modules, install deps, then remove tools
-RUN apk add --no-cache python3 make g++ && \
-    npm install --production --silent && \
-    apk del python3 make g++
+# Install build tools for native modules, install deps, then remove tools
+# Debian uses apt-get instead of apk
+RUN apt-get update && apt-get install -y python3 make g++ \
+    && npm install --production --silent \
+    && apt-get remove -y python3 make g++ \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy source
 COPY . .
