@@ -2,14 +2,16 @@ import { Router } from "express";
 import {
   streamVideoController,
   streamTorrentController,
+  torrentInfoController,
+  attachRequestId,
 } from "../controllers/videoStreamingController.js";
 
 const router = Router();
 
-// Endpoint: /api/stream/:filename
-router.get("/stream/:filename", streamVideoController);
+router.use(attachRequestId);
 
-// New endpoint for torrent streaming that matches the frontend URL
+router.get("/stream/:filename", streamVideoController);
 router.get("/torrent/:magnet", streamTorrentController);
+router.get("/torrent/:magnet/info", torrentInfoController);
 
 export default router;

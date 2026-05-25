@@ -1,7 +1,10 @@
 import { Router } from "express";
+import { getStatus, attachRequestId } from "../controllers/videoStreamingController.js";
+import { ping } from "../controllers/pingController.js";
 
 const router = Router();
-import { ping, getStatus } from "../controllers/pingController.js";
+
+router.use(attachRequestId);
 
 router.get("/ping", ping);
 router.get("/status", getStatus);
