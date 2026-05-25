@@ -22,6 +22,14 @@ function prodLog(level, message, context = {}) {
 // Initialize WebTorrent client
 const client = new WebTorrent();
 
+client.on('error', (err) => {
+  console.error('WebTorrent client error:', err.message);
+});
+
+client.on('torrent', (torrent) => {
+  console.log('Torrent added internally:', torrent.name);
+});
+
 // Track active torrents to avoid duplicates and manage resources
 const activeTorrents = new Map();
 
@@ -258,11 +266,13 @@ export async function streamTorrentController(req, res) {
           path: downloadsPath // Store downloads in separate directory
         };
         
-        client.add(magnetLink, addOptions, (torrent) => {
-          prodLog("info", "Torrent added", {
-            torrentName: torrent.name,
-            magnetLink,
-          });
+        const torrent = client.add(magnetLink, addOptions);
+        
+        torrent.on('error', (err) => {
+          settle(reject, err);
+        });
+        
+        torrent.on('ready', () => {
           if (timeoutId) {
             clearTimeout(timeoutId);
           }
@@ -271,6 +281,10 @@ export async function streamTorrentController(req, res) {
 
         // Timeout after 30 seconds if torrent doesn't start
         timeoutId = setTimeout(() => {
+          const torrentExists = activeTorrents.has(magnetLink);
+          if (torrentExists) {
+            removeTorrent(magnetLink);
+          }
           settle(reject, new Error("Torrent download timeout"));
         }, 30000);
       });
