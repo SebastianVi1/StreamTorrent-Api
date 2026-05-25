@@ -1,3 +1,10 @@
+/**
+ * StreamTorrent API — Express Application
+ *
+ * Mounts the API routes and middleware. CORS is enabled so the API can be
+ * called from browser-based frontends on any origin.
+ */
+
 import express from "express";
 import cors from "cors";
 import videoStreamingRoutes from "./routes/videoStreaming.js";
